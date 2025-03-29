@@ -1,0 +1,7 @@
+matplotlib
+numpy
+pillow
+qrcode
+pyinstaller
+selenium
+webdriver-manager
