@@ -1,5 +1,6 @@
 *.json
 *.png
+.DS_Store
 qrcode/
 __pycache__/
 
