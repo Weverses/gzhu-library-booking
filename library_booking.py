@@ -61,7 +61,7 @@ class LibraryBooking:
         self.cookie_manager = CookieManager()
         self.username = None  # 存储当前用户名
         self.password = None  # 存储当前密码
-        self.debug = False  # 调试模式开关
+        self.debug = True  # 调试模式开关
         self.app_acc_no = None  # 存储用户的appAccNo值，用于预约
         self.debug_print(f"已设置随机User-Agent: {random_ua}")
     
@@ -208,10 +208,58 @@ class LibraryBooking:
         print("\033[31m无法获取有效的cookie\033[0m")
         return False
 
-    def get_app_acc_no(self):
-        """从预约列表中获取appAccNo值"""
+    def get_person_appAccNo(self):
+        """从用户信息API获取appAccNo"""
         try:
-            self.debug_print("尝试获取用户appAccNo...")
+            self.debug_print("尝试从userInfo API获取用户ID")
+            # 确保使用正确的URL
+            url = "http://libbooking.gzhu.edu.cn/ic-web/auth/userInfo"
+            
+            self.debug_print(f"请求用户信息URL: {url}")
+            
+            # 发送请求 - 使用requests库而不是session
+            response = requests.get(url, headers=self.headers, verify=False)
+            
+            self.debug_print(f"userInfo API响应状态码: {response.status_code}")
+            self.debug_print(f"userInfo API响应内容: {response.text}...")
+            
+            if response.status_code == 200:
+                data = response.json()
+                # 兼容大小写的code字段
+                code = data.get("code") or data.get("CODE")
+                if (code == 0 or code == "0") and "data" in data:
+                    app_acc_no = data["data"].get("accNo")
+                    if app_acc_no:
+                        self.app_acc_no = app_acc_no
+                        self.debug_print(f"成功获取用户ID: {app_acc_no}")
+                        return app_acc_no
+                    else:
+                        self.debug_print("用户信息中没有accNo字段")
+                else:
+                    # 兼容大小写的message字段
+                    message = data.get("message") or data.get("MESSAGE", "未知错误")
+                    self.debug_print(f"API返回错误: {message}")
+            else:
+                self.debug_print(f"获取用户信息失败，状态码: {response.status_code}")
+            
+            return None
+        except Exception as e:
+            self.debug_print(f"获取用户ID时发生异常: {str(e)}")
+            import traceback
+            self.debug_print(f"异常详情: {traceback.format_exc()}")
+            return None
+
+    def get_app_acc_no(self):
+        """获取用户的appAccNo，首先尝试userInfo接口，然后尝试从预约列表中获取"""
+        # 先尝试从userInfo接口获取
+        app_acc_no = self.get_person_appAccNo()
+        if app_acc_no:
+            self.debug_print(f"从userInfo接口获取到appAccNo: {app_acc_no}")
+            return app_acc_no
+            
+        # 如果失败，再尝试从预约列表获取
+        try:
+            self.debug_print("尝试从预约列表获取用户appAccNo...")
             
             # 计算查询日期范围
             today = datetime.now()
@@ -235,7 +283,7 @@ class LibraryBooking:
             
             if response.status_code == 200:
                 result = response.json()
-                if result.get("code") == 0:
+                if result.get("code") == 0 or result.get("CODE") == "0":
                     # 从响应中获取appAccNo
                     if "data" in result and len(result["data"]) > 0:
                         first_reservation = result["data"][0]
@@ -246,33 +294,19 @@ class LibraryBooking:
                         else:
                             self.debug_print("在预约记录中未找到appAccNo字段")
                     else:
-                        self.debug_print("无预约记录，尝试从用户信息获取appAccNo")
-                        # 尝试从用户信息中获取
-                        
-                        user_url = "http://libbooking.gzhu.edu.cn/ic-web/auth/user"
-                        user_response = requests.get(user_url, headers=self.headers, verify=False)
-                        if user_response.status_code == 200:
-                            user_data = user_response.json()
-                            if user_data.get("code") == 0 and "data" in user_data:
-                                user_info = user_data["data"]
-                                if "accNo" in user_info:
-                                    self.app_acc_no = user_info["accNo"]
-                                    self.debug_print(f"从用户信息获取appAccNo: {self.app_acc_no}")
-                                    return self.app_acc_no
-                        
-                    self.debug_print("无法获取appAccNo，将使用默认值")
+                        self.debug_print("无预约记录，无法获取appAccNo")
                 else:
-                    self.debug_print(f"获取预约列表失败: {result.get('message')}")
+                    self.debug_print(f"获取预约列表失败: {result.get('message', result.get('MESSAGE', ''))}")
             else:
                 self.debug_print(f"请求失败，状态码: {response.status_code}")
         
         except Exception as e:
             self.debug_print(f"获取appAccNo过程出错: {str(e)}")
+            import traceback
+            self.debug_print(f"异常详情: {traceback.format_exc()}")
         
-        # 使用默认值
-        self.app_acc_no = 101624803  # 默认值，可能不适用于所有用户
-        self.debug_print(f"使用默认appAccNo: {self.app_acc_no}")
-        return self.app_acc_no
+        self.debug_print("无法获取appAccNo，请联系开发者")
+        return None
 
     def refresh_cookie_if_needed(self, target_time=None, force_refresh=False):
         """如果cookie即将过期或在预约前，刷新cookie
@@ -493,25 +527,62 @@ class LibraryBooking:
         
         return available_times
 
-    def make_reservation(self, seat_sn, begin_time, end_time, date_str):
+    def make_reservation(self, seat_sn, begin_time, end_time, date_str, app_acc_no=None):
         """提交座位预约请求"""
         # 清理可能存在的非法Unicode字符
         begin_time = ''.join(char for char in begin_time if ord(char) < 0xD800 or ord(char) > 0xDFFF)
         end_time = ''.join(char for char in end_time if ord(char) < 0xD800 or ord(char) > 0xDFFF)
         
-        # 确保已获取appAccNo
-        if self.app_acc_no is None:
-            self.get_app_acc_no()
+        # 使用传入的app_acc_no或尝试获取
+        if app_acc_no is None:
+            # 确保已获取appAccNo
+            if self.app_acc_no is None:
+                self.get_app_acc_no()
+            app_acc_no = self.app_acc_no
         
-        app_acc_no = self.app_acc_no
+        # 检查app_acc_no是否有效
+        if not app_acc_no:
+            return {"code": -1, "message": "无法获取用户ID (appAccNo)"}
+        
+        # 确保self.year存在
+        if not hasattr(self, 'year') or self.year is None:
+            # 如果date_str是MMDD格式 (例如0513)
+            if len(date_str) == 4:
+                self.year = str(datetime.now().year)
+            # 如果date_str是YYYYMMDD格式 (例如20250513)
+            elif len(date_str) == 8:
+                self.year = date_str[:4]
+                date_str = date_str[4:]  # 截取后面的MMDD部分
+            # 如果是其他格式则使用当前年份
+            else:
+                self.year = str(datetime.now().year)
+        
+        # 构建正确的日期字符串格式
+        try:
+            # 解析日期字符串
+            if len(date_str) == 4:  # MMDD
+                month = date_str[:2]
+                day = date_str[2:]
+                formatted_date = f"{self.year}-{month}-{day}"
+            elif len(date_str) == 8:  # YYYYMMDD
+                year = date_str[:4]
+                month = date_str[4:6]
+                day = date_str[6:]
+                formatted_date = f"{year}-{month}-{day}"
+            elif '-' in date_str:  # YYYY-MM-DD
+                formatted_date = date_str
+            else:
+                return {"code": -1, "message": f"无效的日期格式: {date_str}"}
+        except Exception as e:
+            return {"code": -1, "message": f"日期格式处理错误: {str(e)}"}
         
         data = {
             "sysKind": 8,
-            "appAccNo": app_acc_no,
             "memberKind": 1,
+            "appAccNo": app_acc_no,
             "resvMember": [app_acc_no],  # 使用appAccNo值
-            "resvBeginTime": f"{self.year}-{date_str[:2]}-{date_str[2:]} {begin_time}:00",
-            "resvEndTime": f"{self.year}-{date_str[:2]}-{date_str[2:]} {end_time}:00",
+            "resvBeginTime": f"{formatted_date} {begin_time}:00",
+            "resvEndTime": f"{formatted_date} {end_time}:00",
             "testName": "",
             "captcha": "",
             "resvProperty": 0,
@@ -521,10 +592,11 @@ class LibraryBooking:
 
         try:
             # 构建请求URL
-            url = f"https://{self.base_url}/ic-web/reserve"
+            url = f"http://{self.base_url}/ic-web/reserve"
             
-            self.debug_print(f"发送POST请求: {url}")
-            self.debug_print(f"请求数据: {json.dumps(data)}")
+            if self.debug:
+                self.debug_print(f"发送预约请求: {url}")
+                self.debug_print(f"预约数据: {json.dumps(data, ensure_ascii=False)}")
             
             # 发送POST请求
             response = requests.post(url, headers=self.headers, json=data, verify=False)
@@ -533,13 +605,18 @@ class LibraryBooking:
             result = response.json()
             
             if self.debug:
-                self.debug_print(f"响应状态码: {response.status_code}")
-                self.debug_print(f"响应内容: {json.dumps(result, indent=2, ensure_ascii=False)}")
+                self.debug_print(f"预约响应状态码: {response.status_code}")
+                self.debug_print(f"预约响应内容: {json.dumps(result, indent=2, ensure_ascii=False)}")
             
-            if result["code"] == 0:
+            # 转换响应格式为统一的格式
+            if "code" in result:
+                result["CODE"] = result["code"]
+                result["MESSAGE"] = result.get("message", "")
+            
+            if result.get("CODE", result.get("code")) == 0:
                 print(f"\033[32m预约成功! 座位: {seat_sn}, 时间: {begin_time}-{end_time}\033[0m")
             else:
-                print(f"\033[31m预约失败: {result.get('message', '未知错误')}\033[0m")
+                print(f"\033[31m预约失败: {result.get('MESSAGE', result.get('message', '未知错误'))}\033[0m")
             
             return result
             
@@ -547,8 +624,8 @@ class LibraryBooking:
             print(f"\033[31m[ERROR] 预约请求发生错误: {str(e)}\033[0m")
             if self.debug:
                 import traceback
-                self.debug_print(f"异常详情: {traceback.format_exc()}")
-            return None
+                self.debug_print(f"预约异常详情: {traceback.format_exc()}")
+            return {"CODE": -1, "MESSAGE": f"预约请求异常: {str(e)}"}
 
     def get_room_layout(self, room_id):
         """获取房间平面图"""
