@@ -451,6 +451,7 @@ class LibraryBooking:
             # 解析JSON响应
             data = response.json()
             
+            print(f"{data}")
             if self.debug:
                 self.debug_print(f"响应状态码: {response.status_code}")
                 self.debug_print(f"响应数据大小: {len(response.content)} 字节")
@@ -897,7 +898,7 @@ class LibraryBooking:
         print("\n座位布局图已保存为 seat_layout.png")
         
         # 使用非阻塞模式显示图形
-        plt.show(block=False)
+        # plt.show(block=False)
 
     def check_seat_available(self, seat_info, target_start, target_end):
         """检查座位在指定时间段是否可用"""
@@ -1106,7 +1107,7 @@ class LibraryBooking:
             # 计算查询日期范围（前一天到后一天）
             today = datetime.now()
             begin_date = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-            end_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")  # 扩大到一周以便查看更多预约
+            end_date = (today + timedelta(days=7)).strftime("%Y-%m-%d")
             
             # 构建请求URL和参数
             url = f"https://{self.base_url}/ic-web/reserve/resvInfo"
@@ -1312,8 +1313,9 @@ class LibraryBooking:
                             
                         if 1 <= index <= len(sorted_reservations):
                             selected_resv = sorted_reservations[index-1]
-                            resv_id = selected_resv["resvId"]
-                            success = self.sign_reservation(resv_id)
+                            seat_info = selected_resv["resvDevInfoList"][0]
+                            devSn = seat_info["devSn"]
+                            success = self.sign_reservation(devSn)
                             if success:
                                 print("\n\033[32m[SUCCESS] 签到成功！\033[0m")
                             # 重新获取预约列表
@@ -1334,34 +1336,46 @@ class LibraryBooking:
         
         return sorted_reservations
 
-    def sign_reservation(self, resv_id):
+    def sign_reservation(self, devSn):
         """发送请求签到预约"""
         try:
-            # 创建HTTPS连接
-            conn = http.client.HTTPSConnection(self.base_url)
-            
-            # 构造请求数据
-            data = {"resvId": resv_id}
-            json_data = json.dumps(data)
-            
-            self.debug_print(f"发送POST请求: https://{self.base_url}/ic-web/phoneSeatReserve/sign")
-            self.debug_print(f"请求数据: {json_data}")
+            lurl = f"https://{self.base_url}/ic-web/phoneSeatReserve/login"
             
             # 发送POST请求
-            conn.request("POST", "/ic-web/phoneSeatReserve/sign", body=json_data, headers=self.headers)
+            login_data = {
+                "devSn": devSn,
+                "type": "1",
+                "bind": 0,
+                "loginType": 2
+            }
             
-            # 获取响应``
-            response = conn.getresponse()
-            response_data = response.read()
+            response_login = requests.post(url=lurl, json=login_data, headers=self.headers, timeout=60)
             
-            # 解析JSON响应
-            result = json.loads(response_data.decode("utf-8"))
+            response_login_data = response_login.json()
             
             if self.debug:
-                self.debug_print(f"响应状态码: {response.status}")
+                self.debug_print(f"响应状态码: {response_login.status_code}")
+                self.debug_print(f"响应数据: {json.dumps(response_login_data, indent=2, ensure_ascii=False)}")
+            
+            resvId = response_login_data.get('data').get('reserveInfo').get('resvId')
+            # 构造请求数据
+            data = {"resvId": resvId}
+            
+            self.debug_print(f"发送POST请求: https://{self.base_url}/ic-web/phoneSeatReserve/sign")
+            self.debug_print(f"请求数据: {data}")
+            
+            # 发送POST请求
+            url = f"https://{self.base_url}/ic-web/phoneSeatReserve/sign"
+            response = requests.post(url, headers=self.headers, json=data, verify=False)
+            
+            # 解析JSON响应
+            result = response.json()
+            
+            if self.debug:
+                self.debug_print(f"响应状态码: {response.status_code}")
                 self.debug_print(f"响应数据: {json.dumps(result, indent=2, ensure_ascii=False)}")
             
-            if result.get("code") == 0:
+            if result["code"] == 0:
                 return True
             else:
                 print(f"\033[31m[ERROR] 签到失败: {result.get('message', '未知错误')}\033[0m")
